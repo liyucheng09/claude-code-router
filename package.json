@@ -1,0 +1,24 @@
+{
+  "name": "@musistudio/claude-code-router",
+  "version": "2.0.0",
+  "description": "Use Claude Code without an Anthropics account and route it to another LLM provider",
+  "bin": {
+    "ccr": "cli.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "claude",
+    "code",
+    "router",
+    "llm",
+    "anthropic"
+  ],
+  "author": "musistudio",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/liyucheng09/claude-code-router.git"
+  }
+}
