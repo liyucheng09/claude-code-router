@@ -19,5 +19,9 @@ export const createEnvVariables = async (): Promise<Record<string, string | unde
     API_TIMEOUT_MS: String(config.API_TIMEOUT_MS ?? 600000),
     // Reset CLAUDE_CODE_USE_BEDROCK when running with ccr
     CLAUDE_CODE_USE_BEDROCK: undefined,
+    // Tell Claude Code the actual context size of glm5 (default fallback is 200K)
+    CLAUDE_CODE_MAX_CONTEXT_TOKENS: "262144",
+    // Auto compact triggers at 80% to leave headroom for the compact request itself
+    CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "80",
   };
 }
