@@ -183,6 +183,12 @@ export class AnthropicTransformer implements Transformer {
       max_tokens: request.max_tokens,
       temperature: request.temperature,
       stream: request.stream,
+      // Request usage data in streaming responses so the transformer can
+      // populate the Anthropic message_start/message_delta usage fields.
+      // Without this, many OpenAI-compatible providers (e.g. sglang/glm5)
+      // return usage: null in every chunk, breaking auto-compact and
+      // statusline token tracking in Claude Code.
+      stream_options: request.stream ? { include_usage: true } : undefined,
       tools: request.tools?.length
         ? this.convertAnthropicToolsToUnified(request.tools)
         : undefined,
@@ -266,6 +272,14 @@ export class AnthropicTransformer implements Transformer {
         let hasStarted = false;
         let hasTextContentStarted = false;
         let hasFinished = false;
+        // Track usage from upstream chunks. OpenAI-compatible providers may
+        // include usage at any point (often with finish_reason). We accumulate
+        // the latest usage here so message_delta always has accurate totals.
+        let accumulatedUsage = {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_input_tokens: 0,
+        };
         const toolCalls = new Map<number, any>();
         const toolCallIndexToContentBlockIndex = new Map<number, number>();
         let totalChunks = 0;
@@ -349,9 +363,9 @@ export class AnthropicTransformer implements Transformer {
                         stop_sequence: null,
                       },
                       usage: {
-                        input_tokens: 0,
-                        output_tokens: 0,
-                        cache_read_input_tokens: 0,
+                        input_tokens: accumulatedUsage.input_tokens,
+                        output_tokens: accumulatedUsage.output_tokens,
+                        cache_read_input_tokens: accumulatedUsage.cache_read_input_tokens,
                       },
                     })}\n\n`
                   )
@@ -395,14 +409,17 @@ export class AnthropicTransformer implements Transformer {
             }
 
             const { done, value } = await reader.read();
-            if (done) break;
+            if (done) {
+              break;
+            }
 
-            buffer += decoder.decode(value, { stream: true });
+            const rawChunk = decoder.decode(value, { stream: true });
+            buffer += rawChunk;
             const lines = buffer.split("\n");
             buffer = lines.pop() || "";
 
             for (const line of lines) {
-              if (isClosed || hasFinished) break;
+              if (isClosed) break;
 
               if (!line.startsWith("data:")) continue;
               const data = line.slice(5).trim();
@@ -446,6 +463,20 @@ export class AnthropicTransformer implements Transformer {
                 if (!hasStarted && !isClosed && !hasFinished) {
                   hasStarted = true;
 
+                  // If the upstream already sent usage (some providers include
+                  // it in the first chunk), use it; otherwise start at 0.
+                  if (chunk.usage) {
+                    accumulatedUsage = {
+                      input_tokens:
+                        (chunk.usage?.prompt_tokens || 0) -
+                        (chunk.usage?.prompt_tokens_details?.cached_tokens ||
+                          0),
+                      output_tokens: chunk.usage?.completion_tokens || 0,
+                      cache_read_input_tokens:
+                        chunk.usage?.prompt_tokens_details?.cached_tokens || 0,
+                    };
+                  }
+
                   const messageStart = {
                     type: "message_start",
                     message: {
@@ -457,8 +488,9 @@ export class AnthropicTransformer implements Transformer {
                       stop_reason: null,
                       stop_sequence: null,
                       usage: {
-                        input_tokens: 0,
-                        output_tokens: 0,
+                        input_tokens: accumulatedUsage.input_tokens,
+                        output_tokens: accumulatedUsage.output_tokens,
+                        cache_read_input_tokens: accumulatedUsage.cache_read_input_tokens,
                       },
                     },
                   };
@@ -474,6 +506,19 @@ export class AnthropicTransformer implements Transformer {
 
                 const choice = chunk.choices?.[0];
                 if (chunk.usage) {
+                  // Accumulate usage from upstream provider so message_delta
+                  // always reflects the latest totals. Some providers send
+                  // usage only in the final chunk with finish_reason.
+                  accumulatedUsage = {
+                    input_tokens:
+                      (chunk.usage?.prompt_tokens || 0) -
+                      (chunk.usage?.prompt_tokens_details?.cached_tokens ||
+                        0),
+                    output_tokens: chunk.usage?.completion_tokens || 0,
+                    cache_read_input_tokens:
+                      chunk.usage?.prompt_tokens_details?.cached_tokens ||
+                      0,
+                  };
                   if (!stopReasonMessageDelta) {
                     stopReasonMessageDelta = {
                       type: "message_delta",
@@ -481,27 +526,10 @@ export class AnthropicTransformer implements Transformer {
                         stop_reason: "end_turn",
                         stop_sequence: null,
                       },
-                      usage: {
-                        input_tokens:
-                          (chunk.usage?.prompt_tokens || 0) -
-                          (chunk.usage?.prompt_tokens_details?.cached_tokens ||
-                            0),
-                        output_tokens: chunk.usage?.completion_tokens || 0,
-                        cache_read_input_tokens:
-                          chunk.usage?.prompt_tokens_details?.cached_tokens ||
-                          0,
-                      },
+                      usage: { ...accumulatedUsage },
                     };
                   } else {
-                    stopReasonMessageDelta.usage = {
-                      input_tokens:
-                        (chunk.usage?.prompt_tokens || 0) -
-                        (chunk.usage?.prompt_tokens_details?.cached_tokens ||
-                          0),
-                      output_tokens: chunk.usage?.completion_tokens || 0,
-                      cache_read_input_tokens:
-                        chunk.usage?.prompt_tokens_details?.cached_tokens || 0,
-                    };
+                    stopReasonMessageDelta.usage = { ...accumulatedUsage };
                   }
                 }
                 if (!choice) {
@@ -895,20 +923,18 @@ export class AnthropicTransformer implements Transformer {
                         stop_reason: anthropicStopReason,
                         stop_sequence: null,
                       },
-                      usage: {
-                        input_tokens:
-                          (chunk.usage?.prompt_tokens || 0) -
-                          (chunk.usage?.prompt_tokens_details?.cached_tokens ||
-                            0),
-                        output_tokens: chunk.usage?.completion_tokens || 0,
-                        cache_read_input_tokens:
-                          chunk.usage?.prompt_tokens_details?.cached_tokens ||
-                          0,
-                      },
+                      usage: { ...accumulatedUsage },
                     };
                   }
 
-                  break;
+                  // Don't break — continue processing remaining chunks in
+                  // the buffer. When stream_options.include_usage is true,
+                  // a final chunk with choices:[] and actual usage data may
+                  // follow. Setting hasFinished lets the for-loop guard at
+                  // line 419 skip any further content chunks but the usage
+                  // check at line 504 still runs for the usage-only chunk.
+                  hasFinished = true;
+                  continue;
                 }
               } catch (parseError: any) {
                 this.logger?.error(

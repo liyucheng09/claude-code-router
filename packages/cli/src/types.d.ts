@@ -73,6 +73,8 @@ interface ClaudeSettingsFlag {
     CLAUDE_CODE_ATTRIBUTION_HEADER: any;
     API_TIMEOUT_MS: string;
     CLAUDE_CODE_USE_BEDROCK?: undefined;
+    CLAUDE_CODE_AUTO_COMPACT_WINDOW?: string;
+    CLAUDE_AUTOCOMPACT_PCT_OVERRIDE?: string;
     [key: string]: any;
   };
   statusLine?: {
