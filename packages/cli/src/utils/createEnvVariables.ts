@@ -22,6 +22,6 @@ export const createEnvVariables = async (): Promise<Record<string, string | unde
     // Tell Claude Code the actual context size for auto-compact decisions
     CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(config.MAX_CONTEXT_TOKENS ?? 202752),
     // Auto compact triggers at 80% by default to leave headroom for the compact request itself
-    CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: String(config.AUTOCOMPACT_PCT ?? 80),
+    CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: String(config.AUTOCOMPACT_PCT ?? 90),
   };
 }
