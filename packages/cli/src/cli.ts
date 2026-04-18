@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { run, restartService } from "./utils";
 import { showStatus } from "./utils/status";
-import { executeCodeCommand, PresetConfig } from "./utils/codeCommand";
+import { executeCodeCommand, executeHappyCommand, PresetConfig } from "./utils/codeCommand";
 import {
   cleanupPidFile,
   isServiceRunning,
@@ -30,6 +30,7 @@ const KNOWN_COMMANDS = [
   "status",
   "statusline",
   "code",
+  "happy",
   "model",
   "preset",
   "install",
@@ -52,6 +53,7 @@ Commands:
   status        Show server status
   statusline    Integrated statusline
   code          Execute claude command
+  happy         Execute happy claude with router env vars
   model         Interactive model selection and configuration
   preset        Manage presets (export, install, list, delete)
   install       Install preset from GitHub marketplace
@@ -66,6 +68,7 @@ Presets:
 Examples:
   ccr start
   ccr code "Write a Hello World"
+  ccr happy                             # Use happy with router
   ccr my-preset "Write a Hello World"    # Use preset configuration
   ccr model
   ccr preset export my-config            # Export current config as preset
@@ -304,6 +307,34 @@ async function main() {
       } else {
         const codeArgs = process.argv.slice(3);
         executeCodeCommand(codeArgs);
+      }
+      break;
+    case "happy":
+      if (!isRunning) {
+        console.log("Service not running, starting service...");
+        const cliPath = join(__dirname, "cli.js");
+        const startProcess = spawn("node", [cliPath, "start"], {
+          detached: true,
+          stdio: "ignore",
+        });
+
+        startProcess.on("error", (error) => {
+          console.error("Failed to start service:", error.message);
+          process.exit(1);
+        });
+
+        startProcess.unref();
+
+        if (await waitForService()) {
+          await executeHappyCommand(process.argv.slice(3));
+        } else {
+          console.error(
+            "Service startup timeout, please manually run `ccr start` to start the service"
+          );
+          process.exit(1);
+        }
+      } else {
+        await executeHappyCommand(process.argv.slice(3));
       }
       break;
     case "ui":

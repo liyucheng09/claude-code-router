@@ -144,3 +144,56 @@ export async function executeCodeCommand(
     process.exit(code || 0);
   });
 }
+
+/**
+ * Execute `happy claude` with router environment variables passed via --claude-env.
+ * This combines ccr's model routing with happy's mobile/web handoff features.
+ */
+export async function executeHappyCommand(
+  args: string[] = [],
+  envOverrides?: Record<string, string>,
+) {
+  const env = await createEnvVariables();
+
+  // Apply environment variable overrides (from preset's provider configuration)
+  if (envOverrides) {
+    Object.assign(env, envOverrides);
+  }
+
+  // Build --claude-env flags from the env vars that ccr would normally set
+  const claudeEnvFlags: string[] = [];
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined) {
+      claudeEnvFlags.push('--claude-env', `${key}=${value}`);
+    }
+  }
+
+  // Increment reference count when command starts
+  incrementReferenceCount();
+
+  const happyArgs = ['claude', ...claudeEnvFlags, ...args];
+
+  // Build a clean env: apply ccr vars and explicitly unset vars that ccr wants removed
+  const cleanEnv = { ...process.env, ...env };
+  delete cleanEnv.CLAUDE_CODE_USE_BEDROCK;
+
+  const happyProcess = spawn('happy', happyArgs, {
+    stdio: 'inherit',
+    env: cleanEnv,
+  });
+
+  happyProcess.on("error", (error) => {
+    console.error("Failed to start happy command:", error.message);
+    console.log(
+      "Make sure Happy CLI is installed: npm install -g happy"
+    );
+    decrementReferenceCount();
+    process.exit(1);
+  });
+
+  happyProcess.on("close", (code) => {
+    decrementReferenceCount();
+    closeService();
+    process.exit(code || 0);
+  });
+}
